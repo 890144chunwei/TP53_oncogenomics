@@ -15,8 +15,8 @@ args <- parse_args(OptionParser(option_list=option_list))
 
 ##### test #########
 #args <- list()
-#args$input_file <- "/rsrch5/home/tdccct/cchen21/cgcrun_0117/cgc_02239/task_outputs/cgc_02239.genes.results"
-#args$outut_file <- "/rsrch5/home/tdccct/cchen21/cgcrun_0117/cgc_02239/task_outputs"
+#args$input_file <- "XXX"
+#args$outut_file <- "XXX"
 ###################
 
 # Check input file
@@ -35,8 +35,7 @@ if(is.null(args$output_path)){
 }
 
 # Load reference for gene_id <> gene_name
-ref_path <- "/rsrch3/home/tdccct/shared/platforms/data/cgc/"
-anno_file_path <- paste0(ref_path, "datasets/gencode.v31.basic.ensg.anno")
+anno_file_path <- "../data/Reference/gencode.v31.basic.ensg.anno"
 
 # Load TCGA_up (20 genes) signature
 gs <- list()
