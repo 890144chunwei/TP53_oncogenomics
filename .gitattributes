@@ -1,2 +1,4 @@
 data/Reference/OmicsExpressionProteinCodingGenesTPMLogp1.csv filter=lfs diff=lfs merge=lfs -text
 data/Reference/Depmap_OmicsExpressionProteinCodingGenesTPMLogp1.csv filter=lfs diff=lfs merge=lfs -text
+data/Reference/Depmap_OmicsCNGene.csv filter=lfs diff=lfs merge=lfs -text
+data/Reference/Depmap_OmicsSomaticMutations.csv filter=lfs diff=lfs merge=lfs -text
