@@ -1,0 +1,793 @@
+---
+title: "01_TP53_signature_collection"
+author: "Alan Chen"
+output: github_document
+---
+
+<style type="text/css">
+
+body{ /* Normal  */
+      font-size: 16px;
+  }
+td {  /* Table  */
+  font-size: 16px;
+}
+h1.title {
+  font-size: 28px;
+  color: DarkRed;
+}
+h1 { /* Header 1 */
+  font-size: 22px;
+  color: Black;
+}
+h2 { /* Header 2 */
+    font-size: 20px;
+  color: DarkBlue;
+}
+h3 { /* Header 3 */
+  font-size: 16px;
+  color: Black;
+}
+code.r{ /* Code block */
+    font-size: 16px;
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 16px;
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+# Objectives
+
+TP53 is one of the most well-known gene where its mutations are directly linked to various types of cancers. With mutations observed across the TP53 gene, it is unknown whether a mutation lead to loss-of-function, gain-of-function, or even no impact on the protein functionality. The most orthogonal way to assess p53 functionality is performing specific biological experiments (for example, treatment of nutlin-3, a inhibitor of p53-MDM2, can perturb p53 functions and direct assess p53 functionality in relevant settings). 
+
+However, it is almost impossible to perform such screening for each cell line, in vivo model, and treatment context. Therefore, in the project, I wanted to evaluate whether there is a good p53 signature score that we can utilize to predict p53 functionality from RNA-seq gene expression.
+
+I collected publicly available p53 signature derived through different methodology, and evaluated them utilizing Depmap RNA-seq profiling of over 900 human cell lines. The goal is to identify a p53 signature to infer p53 functionality simply from RNA-seq readouts.
+
+
+# Summary
+
+* TCGA_up (20 genes) and Jeay_2015 (13 genes) are both good signatures indicating p53 functionality through RNA-seq
+* There are also other signatures indicating down-regulation of p53 functionality (eg the TCGA_down 20 genes signature). However, this down-regulation score is not adding value to the up-regulation score
+* Aerts_2016 paper utilized transcriptional binding to derive the p53-bound target genes in the signature. Genes in this signature can be clustered into three groups - potentially up-, down-, and not-associated
+
+
+## Collection of p53 signatures
+
+Several p53 signatures collection:
+  -   Jeay_2015 (Jeay et. al, Elife, 2015)
+  -   TCGA_up and TCGA_dn (Donehower et al. Cell Rep, 2019)
+  -   Aerts_2016 (Verfaillie et al, Genome Res, 2016)
+  -   p53 hallmark gene set
+
+
+There are 8 genes overlapping the two signatures, Jeay_2015 and TCGA_up
+
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+library(readxl)
+library(tidyverse)
+library(dplyr)
+
+# Load depmap data
+Depmap_Model <- read_csv("../data/Reference/Depmap_Model.csv") %>% select(ModelID, StrippedCellLineName)
+Depmap_tpm <- read_csv("../data/reference/Depmap_OmicsExpressionProteinCodingGenesTPMLogp1.csv")
+# Sort depmap data
+rownames(Depmap_tpm) <- Depmap_tpm$...1
+Depmap_raw <- Depmap_tpm %>% rownames_to_column(var = "ProfileID") %>% select(!...1) %>% inner_join(Depmap_Model, ., by = c("ModelID" = "ProfileID"))
+
+# Load cell line P53 functional data from 2018 Nat Gen paper from Broad
+Data_broad_2018 <- read_excel("../data/Reference/Broad_2018_Supp_Table1.xlsx")
+colnames(Data_broad_2018) <- Data_broad_2018[1,]
+Data_broad_2018 <- Data_broad_2018 %>% mutate(CellLine = str_replace(CCLE_Cell_Line_Name, "[_].*", ""))
+
+# Subset cell line data shared by Depmap and Broad paper
+shared <- intersect(Depmap_raw$StrippedCellLineName, Data_broad_2018$CellLine)
+Depmap_filter <- Depmap_raw %>% filter(StrippedCellLineName %in% shared) %>% column_to_rownames(var = "StrippedCellLineName") %>% select(!ModelID) %>% t() %>% data.frame()
+rownames(Depmap_filter) <- str_replace(rownames(Depmap_filter), "[ ].*", "")
+
+
+# Load P53 hallmark
+library(GSA)
+gs <- list()
+hallmark <- GSA.read.gmt("../data/Reference/h.all.v2022.1.Hs.symbols.gmt")
+names(hallmark[["genesets"]]) <- hallmark[["geneset.names"]]
+gs[["hallmark_P53"]] <- hallmark[["genesets"]][["HALLMARK_P53_PATHWAY"]]
+gs[["Sig_Jeay_2015"]] <- c("MDM2", "CDKN1A", "ZMAT3", "DDB2", "FDXR", "RPS27L", "BAX", "RRM2B", "SESN1", "CCNG1", "XPC", "TNFRSF10B", "AEN")
+gs[["TCGA_up"]] <- c("SPATA18", "EDA2R", "DDB2", "MDM2", "CDKN2A", "RPS27L", "PHLDA3", "PTCHD4", "FDXR" ,"TNFRSF10C", "ZMAT3", "AEN", "SESN1", "CYFIP2", "CCNG1", "FAS", "BBC3", "GLS2", "GDF15", "TRIM22")
+gs[["TCGA_dn"]] <- c("BUB1", "DDIAS", "ERCC6L", "MELK", "AUNIP", "CDC20", "CENPI", "FAM72B", "OIP5", "TPX2", "TTK", "CDCA5", "CDCA8", "CENPA", "DEPDC1", "KIF2C", "NDC80", "PLK1", "POLQ", "SGO1")
+gs[["Shared_TCGA_Jeay"]] <- intersect(gs[["TCGA_up"]], gs[["Sig_Jeay_2015"]])
+gs[["Setdiff_TCGA_Jeay"]] <- setdiff(gs[["TCGA_up"]], gs[["Sig_Jeay_2015"]])
+gs[["Union_TCGA_Jeay"]] <- union(gs[["TCGA_up"]], gs[["Sig_Jeay_2015"]])
+ 
+# Load p53 signature from Genome Res, 2016 from Stein Aerts
+Sig_Aerts_2016 <- read_excel("../data/Reference/TP53_signature_Aerts_2016_S5.xlsx") %>% filter(subset == "direct")
+gs[["Sig_Aerts_2016"]] <- unique(Sig_Aerts_2016$gene)
+
+
+# Perfrom ssgsea on all collected p53 signature
+library(GSVA)
+library(Biobase)
+eset <- Biobase::ExpressionSet(as.matrix(Depmap_filter))
+ssgsea <- gsva(eset, gset.idx.list = gs, verbose=FALSE)
+# ssGSEA score to dataframe combining with TP53 status
+score <- Data_broad_2018 %>% 
+  select(CellLine, TP53_Mutation_Type_All_Databases, 
+         `p53_Target_Genes_Average_Z-score_(Jeay_et_al.)_CCLE`,
+         `Functional_Score_(Target_Genes_(CCLE_Z-score)_-_Nutlin-3_(CTD2_Z-score)_-_Nutlin-3_(Sanger_Z-score))`,
+         `Nutlin-3_AUC_Z-Score_CTD2`, 
+         `Nutlin-3_AUC_Z-Score_Sanger_MGH`) %>%
+  inner_join(rownames_to_column(cbind(ssgsea@phenoData@data,t(exprs(ssgsea))), var = "CellLine"), ., by = "CellLine") %>% 
+  mutate(TP53_status = ifelse(str_detect(TP53_Mutation_Type_All_Databases,"WT"), "1_WT",
+                              ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Deletion"), "3_Nonsense/Del",
+                                     ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Nonsense"),
+                                            "3_Nonsense/Del", "2_Other_mutation")))) 
+
+# Highlight some models with top score to track them across signatures
+top <- score %>% filter(TP53_status == "1_WT") %>% top_n(-20, wt = TCGA_up)
+score <- score %>% mutate(top = ifelse(score$CellLine %in% top$CellLine, "Sign", "NotSign"))
+
+```
+
+
+
+## Correlation among signatures
+
+First, I look very broadly at the pearson correlation of the p53 signature collected in all human cell line from Depmap. There are also experimental functional readout provided by the Broad_2016 paper.
+
+The top two p53 signature, Jeay_2015 and TCGA_up, show a very high correlation. It is not surprising that p53_hallmark and p53_score_Aerts show a lower correlation. Because the two gene lists contain a magnitude higher of genes (150-200 genes), it is likely these gene lists include redundant signals.
+
+Another good sign is that TCGA_dn show negative correlation with all other p53 signatures that are associated with up-regulation of p53 functionality. There might be a possibility that we can utilize this negative correlation to optimize p53 signature (we will explore later).
+
+
+```{r,fig.height=6, fig.width=6}
+library(corrplot)
+library(psych)
+
+data <- data.frame("CellLine" = score$TP53_Mutation_Type_All_Databases, 
+                   "TCGA_up" = round(as.numeric(score$TCGA_up),2), 
+                   "TCGA_dn" = round(as.numeric(score$TCGA_dn),2), 
+                   "P53_score_Jeay" = round(as.numeric(score$Sig_Jeay_2015), 2),
+                   "P53_score_Aerts" = round(as.numeric(score$Sig_Aerts_2016), 2), 
+                   "P53_score_hallmark" = round(as.numeric(score$hallmark_P53), 2), 
+                   "Jeay_ccle" = round(as.numeric(score$`p53_Target_Genes_Average_Z-score_(Jeay_et_al.)_CCLE`), 2),
+                   "Functional_score" = round(as.numeric(score$`Functional_Score_(Target_Genes_(CCLE_Z-score)_-_Nutlin-3_(CTD2_Z-score)_-_Nutlin-3_(Sanger_Z-score))`),2)) %>% select(!CellLine)
+
+cor <- corr.test(data, method = "pearson", adjust = "BH")
+col <- colorRampPalette(c("#4477AA", "#77AADD", "#FFFFFF", "#EE9988","#BB4444" ))
+corrplot(as.matrix(cor$r),
+    method = "color", col = col(200), number.font = 1,
+    mar = c(0,0,0,0), number.cex = 1, cl.pos = 'n',
+    addCoef.col = "black", tl.col = "black", tl.srt = 90, type = "upper")
+
+```
+
+
+### Overlap among p53 gene sets
+
+I wanted to understand the signature a little bit better by looking at the shared/unique genes in the p53-related gene lists. 
+
+From the upset plot, it shows that Jeay_2015 is mostly shared with TCGA_up (red). In addition, the set difference of Jeay_2015 from TCGA_up are included in Aerts_2016 and hallmark_p53 (purple). On the other hand, there are 3 unique genes in TCGA_up, potentially due to the unbiased searching deriving this signature.
+
+It suggests that all these genes in different signatures are all in a similar broader set. To evaluate the signature, it is really differentiating signal-to-noise while trying to prevent over-fitting.
+
+
+```{r,fig.height=8, fig.width=10}
+library(UpSetR)
+Upset_list <- list(Hallmark_p53 = gs[["hallmark_P53"]], Jeay_2015 = gs[["Sig_Jeay_2015"]], 
+                   Aerts_2016 = gs[["Sig_Aerts_2016"]], TCGA_up = gs[["TCGA_up"]], 
+                   TCGA_dn = gs[["TCGA_dn"]])
+
+UpSetR::upset(fromList(Upset_list), text.scale = 1.5, sets.bar.color = c("grey10", "grey10","blue", "red", "darkviolet"), point.size = 4, mainbar.y.label = "Overlap of gene sets", line.size = 1.2, queries = list(
+  list(query = intersects, params = list("TCGA_dn"), color = "blue", active = T),
+  list(query = intersects, params = list("TCGA_up"), color = "red", active = T),
+  list(query = intersects, params = list("TCGA_up", "Aerts_2016"), color = "darkred", active = T),
+  list(query = intersects, params = list("TCGA_up", "Hallmark_p53"), color = "darkred", active = T),
+  list(query = intersects, params = list("TCGA_up", "Jeay_2015", "Hallmark_p53"), color = "red", active = T),
+  list(query = intersects, params = list("TCGA_up", "Aerts_2016", "Hallmark_p53"), color = "darkred", active = T),
+  list(query = intersects, params = list("TCGA_up", "Aerts_2016", "Hallmark_p53", "Jeay_2015"), color = "red", active = T),
+  list(query = intersects, params = list("Jeay_2015", "Aerts_2016"), color = "darkviolet", active = T),
+  list(query = intersects, params = list("Jeay_2015", "Hallmark_p53"), color = "darkviolet", active = T),
+  list(query = intersects, params = list("Jeay_2015", "Aerts_2016", "Hallmark_p53"), color = "darkviolet", active = T)
+))
+
+```
+
+
+## Giacomelli et al., Nat Genet., 2019
+
+Relationship between Jeay_ccle signature and functional score as indicated in the paper (Broad_2016)
+
+- Functional score = Jeay_ccle signature - Nutlin-3_CTD2 - Nutlin-3_Sanger_MGH
+
+Both computational gene signature and experimental functional score can clearly distinguish human cell lines with TP53-wt and TP53-inactive mutations. I categorized non-wt and non- nonsensene/deletion into all "other mutation" for now. The anticipation is that these cell lines with "other TP53 mutation" will show a spectrum of p53 functionality.
+
+Here, the data shows a good first QC step that (1) the signatures are associated with p53 functionality in diverse contexts and (2) the Depmap human cell line data set is relavant that can be utlized in this setting.
+
+
+```{r,fig.height=5, fig.width=10}
+library(ggpubr)
+library(cowplot)
+
+# Plot p53 signature score based on reported TP53 genotype
+df <- data.frame("CellLine" = score$TP53_status, 
+                 "Jeay_ccle" = round(as.numeric(score$`p53_Target_Genes_Average_Z-score_(Jeay_et_al.)_CCLE`),2))
+
+p1 <- ggplot(df, aes(x= CellLine, y= Jeay_ccle, color= CellLine, fill= CellLine)) + 
+  geom_boxplot(outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() + 
+  geom_jitter(position=position_jitter(0.2), cex=0.7) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =12, face= "bold")) + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) + 
+  scale_fill_manual(values = c("blue4", "grey40", "darkred")) + 
+  scale_color_manual(values = c("blue4", "grey40", "darkred")) + 
+  stat_compare_means(comparisons = list(c("1_WT", "2_Other_mutation"), 
+                                        c("2_Other_mutation", "3_Nonsense/Del"), 
+                                        c("1_WT", "3_Nonsense/Del")), label = "p.signif") + 
+  ggtitle("p53 score by RNA-seq gene signature")
+
+
+df <- data.frame("CellLine" = score$TP53_status, 
+                 "Functional_score" = round(as.numeric(score$`Functional_Score_(Target_Genes_(CCLE_Z-score)_-_Nutlin-3_(CTD2_Z-score)_-_Nutlin-3_(Sanger_Z-score))`),2))
+
+p2 <- ggplot(df, aes(x= CellLine, y= Functional_score, color= CellLine, fill= CellLine)) +
+  geom_boxplot(outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() + 
+  geom_jitter(position=position_jitter(0.2), cex=0.7) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =12, face= "bold")) + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) + 
+  scale_fill_manual(values = c("blue4", "grey40", "darkred")) + 
+  scale_color_manual(values = c("blue4", "grey40", "darkred"))+ 
+  stat_compare_means(comparisons = list(c("1_WT", "2_Other_mutation"), 
+                                        c("2_Other_mutation", "3_Nonsense/Del"), 
+                                        c("1_WT", "3_Nonsense/Del")), label = "p.signif") + 
+  ggtitle("p53 score by experimental p53 functionality")
+
+
+plot_grid(p1, p2, ncol = 2)
+
+```
+
+
+## Comparison between Jeay_2015 and TCGA_up
+
+I dig a little bit deeper for the two signatures, Jeay_2015 and TCGA_up, since these two signatures have such a high correlation and both perform well in separating TP53-wt and TP53 nonsense/deletion mutations
+
+
+### Overlap of gene list
+
+Similar to the previous upset plot, Jeay_2015 and TCGA_up have a high degree of overlap. It is partially a cause of why the two signatures show such a high correlation. It is still important to understand the difference of those genes not shared.
+
+```{r,fig.height=2, fig.width=3}
+# Venn Diagram for gene sets
+library(eulerr)
+A <- gs[["TCGA_up"]] %>% length()
+B <- gs[["Sig_Jeay_2015"]] %>% length()
+C <- gs[["Sig_Aerts_2016"]] %>% length()
+AB <- intersect(gs[["TCGA_up"]], gs[["Sig_Jeay_2015"]]) %>% length()
+AC <- intersect(gs[["TCGA_up"]], gs[["Sig_Aerts_2016"]]) %>% length()
+BC <- intersect(gs[["Sig_Jeay_2015"]], gs[["Sig_Aerts_2016"]]) %>% length()
+ABC <- intersect(intersect(gs[["TCGA_up"]], gs[["Sig_Jeay_2015"]]), gs[["Sig_Aerts_2016"]]) %>% length()
+#c("A" = (A - AB - AC + ABC), "B" = (B - AB - BC + ABC), "C" = (C - AC - BC + ABC), "A&B" = (AB - ABC), "A&C" = (AC - ABC), "B&C" = (BC - ABC), "A&B&C" = ABC) %>% euler() %>% plot(quantities = TRUE)
+
+c("TCGA" = A- AB, "Jeay" = B-AB, "TCGA&Jeay" = AB) %>% euler() %>% plot(quantities = TRUE)
+
+```
+
+
+### Shared and set difference
+
+Based on the venn diagram above, I further separated the gene list into shared and setdiff.
+
+From the scatter plot visualization, shared gene set and just Jeay_2015 alone perform very good in separating TP53 genotypes. There is still a decent separation of TP53 genotypes, while it is not as good as shared gene set and just Jeay_2015 alone. It suggests that there is potentially still values for this setdiff for the purpose of overfitting.
+
+
+```{r,fig.height=4, fig.width=14}
+df <- data.frame("CellLine" = score$TP53_status, 
+                 "Sig_Jeay_2015" = as.numeric(score$Sig_Jeay_2015), 
+                 "Setdiff_TCGA_Jeay" = as.numeric(score$Setdiff_TCGA_Jeay), 
+                 "Shared_TCGA_Jeay" = as.numeric(score$Shared_TCGA_Jeay), 
+                 "Nutlin_CTD2" = as.numeric(score$`Nutlin-3_AUC_Z-Score_CTD2`), 
+                 "Nutlin_Sanger" = as.numeric(score$`Nutlin-3_AUC_Z-Score_Sanger_MGH`), 
+                 "Functional_score" = as.numeric(score$`Functional_Score_(Target_Genes_(CCLE_Z-score)_-_Nutlin-3_(CTD2_Z-score)_-_Nutlin-3_(Sanger_Z-score))`))
+
+
+p1 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Functional_score", y = "Shared_TCGA_Jeay", color = "CellLine", 
+            fullrange = TRUE, rug = FALSE, size = 1.5, alpha=0.6, palette = c("forestgreen","darkred"))
+
+p2 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Functional_score", y = "Setdiff_TCGA_Jeay", color = "CellLine", 
+            fullrange = TRUE, rug = FALSE, size = 1.5, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p3 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Functional_score", y = "Sig_Jeay_2015", color = "CellLine", 
+            fullrange = TRUE, rug = FALSE, size = 1.5, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+
+plot_grid(p1, p2, p3, nrow =1)
+
+```
+
+
+## Aerts_2016
+
+This paper Aerts_2016 (Verfaillie et al, Genome Res, 2016) derive its signature of 171 genes from the role of p53 as a transcriptional factor. These 171 genes are directly bound (and hypothetically regulated) by p53.
+
+With the nature of TF-binding, I hypothesized that these genes can be broadly separated into 3 groups based on the transcriptomic regulation of p53. There might be gene expressions (1) up-regulated, (2) down-regulated, and (3) unchanged by p53 binding as a TF.
+
+
+### Correlation
+
+To test the hypothesis, I created pairs for every two-gene from the total of 171 genes, and evaluated their correlation across Depmap human cell lines (regardless of genotype). K-means clustering (with k=3) was used to classify the pairs based on their correlations. The heatmap is showing the distance of each pair.
+
+Indeed, there are broadly three clusters identified by the pairwise correlation. As hypothesized, they are potentially clusters representing up-regulation, down-regulation, and unchanged gene expression by p53 binding.
+
+In summary, the 171 genes in the Aerts signature can be roughly clustered in the 3 groups - potentially assigning directionality of -1, 0, 1
+
+
+```{r,fig.height=10, fig.width=10}
+library(pheatmap)
+
+# Filter depmap data
+set.seed(100)
+Cellline_test <- score %>% mutate(TP53_status = ifelse(str_detect(TP53_Mutation_Type_All_Databases,"WT"), "1_WT",
+                                            ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Deletion"), "4_Deletion", 
+                                                   ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Nonsense"), "3_Nonsense",
+                                                          "2_Other_mutation")))) %>% 
+  filter(TP53_status != "2_Other_mutation") %>% pull(CellLine)
+
+# K-means clustering
+set.seed(100)
+data <- Depmap_filter %>% filter(rownames(.) %in% gs[["Sig_Aerts_2016"]]) %>% 
+  select(Cellline_test) %>% t() %>% cor(method = "pearson") 
+km.out <- kmeans(data, centers = 3, nstart = 20)
+
+
+# Set up heatmap
+breaksList = seq(-1, 1, by = 0.01)
+myColor <- colorRampPalette(c("blue", "white", "red"))(length(breaksList))
+heatmap_col <- data.frame(Gene = names(km.out$cluster), 
+                          Cluster = km.out$cluster) %>% filter(Gene %in% gs[["Sig_Aerts_2016"]]) %>% select(Cluster) %>%
+  arrange(Cluster)
+heatmap_color <- list(Cluster = c("1" = "green4", "2" = "dodgerblue", "3" = "purple"))
+
+data <- Depmap_filter %>% filter(rownames(.) %in% gs[["Sig_Aerts_2016"]]) %>% select(Cellline_test) %>% t() 
+data[,match(rownames(heatmap_col), colnames(data))] %>% cor(method = "pearson") %>%
+  pheatmap(border_color = NA, treeheight_row = 15, fontsize_col = 4, fontsize_row = 4, 
+           color = myColor, cluster_rows = F, cluster_cols = F, breaks = breaksList, 
+           annotation_col = heatmap_col, annotation_row = heatmap_col, annotation_colors = heatmap_color)
+
+```
+
+
+### Overlap
+
+The upset plot indicates the relationship of Jeay_2015 and TCGA_up with Aerts_signature dividing into 3 clusters based on the previous k-means classification.
+
+Interestingly, no overlap of Aerts_cluster2 with Jeay_2015 and TCGA_up, suggesting it is most likely gene where p53 binding least to down-regulation of gene expression.
+
+Aerts_cluster1 and Aerts_cluster3 both have a degree of overlap with Jeay_2015 and TCGA_up gene sets. Visually, Aerts_cluster3 has a higher proportion of overlap compared to Aerts_cluster1. Therefore, Aerts_cluster3 is most likely where p53 binding least to up-regulation of gene expression.
+
+This is consistent with the heamp above - large distance between Aerts_cluster2 and Aerts_cluster3, while Aerts_cluster1 is intermediate between.
+
+
+```{r,fig.height=6, fig.width=8}
+gs[["Sig_Aerts_2016_2"]] <- data.frame(Gene = names(km.out$cluster), Cluster = km.out$cluster) %>% filter(Cluster == "2") %>% pull(Gene)
+gs[["Sig_Aerts_2016_1"]] <- data.frame(Gene = names(km.out$cluster), Cluster = km.out$cluster) %>% filter(Cluster == "1") %>% pull(Gene)
+gs[["Sig_Aerts_2016_3"]] <- data.frame(Gene = names(km.out$cluster), Cluster = km.out$cluster) %>% filter(Cluster == "3") %>% pull(Gene)
+
+Upset_list <- list(Jeay_2015 = gs[["Sig_Jeay_2015"]], TCGA_up = gs[["TCGA_up"]], 
+                   Sig_Aerts_2016_2 = gs[["Sig_Aerts_2016_2"]], Sig_Aerts_2016_1 = gs[["Sig_Aerts_2016_1"]], 
+                   Sig_Aerts_2016_3 = gs[["Sig_Aerts_2016_3"]])
+
+UpSetR::upset(fromList(Upset_list), text.scale = 1.5, sets.bar.color = c("darkgreen", "purple", "cornflowerblue", "grey10", "grey10"), point.size = 4, mainbar.y.label = "Overlap of gene sets", line.size = 1.2, queries = list(
+  list(query = intersects, params = list("Sig_Aerts_2016_2"), color = "cornflowerblue", active = T),
+  list(query = intersects, params = list("Sig_Aerts_2016_3"), color = "purple", active = T),
+  list(query = intersects, params = list("Sig_Aerts_2016_3", "TCGA_up"), color = "purple", active = T),
+  list(query = intersects, params = list("Sig_Aerts_2016_3", "Jeay_2015"), color = "purple", active = T),
+  list(query = intersects, params = list("Sig_Aerts_2016_3", "Jeay_2015", "TCGA_up"), color = "purple", active = T),
+  list(query = intersects, params = list("Sig_Aerts_2016_1", "TCGA_up", "Jeay_2015"), color = "darkgreen", active = T),
+  list(query = intersects, params = list("Sig_Aerts_2016_1", "TCGA_up"), color = "darkgreen", active = T)
+))
+
+```
+
+
+### Association with other signatures
+
+I compared the 3 subsets from Aerts_2016 with 3 validated gene sets, TCGA_up, TCGA_dn, and experimental functional score, hypothesizing the 3 subsets are a collection of up-, down-regulation, and no change.
+
+The scatter plot shows that all 3 subsets from Aerts_2016 are actually all associated with TCGA_up, indicating that the 3 subsets from Aerts_2016 do not apply to the potential directionality approach.
+
+
+```{r,fig.height=12, fig.width=14}
+eset <- Biobase::ExpressionSet(as.matrix(Depmap_filter))
+ssgsea <- gsva(eset, gset.idx.list = gs, verbose=FALSE)
+# ssGSEA score to dataframe combining with TP53 status
+score <- Data_broad_2018 %>% 
+  select(CellLine, TP53_Mutation_Type_All_Databases, 
+         `p53_Target_Genes_Average_Z-score_(Jeay_et_al.)_CCLE`,
+         `Functional_Score_(Target_Genes_(CCLE_Z-score)_-_Nutlin-3_(CTD2_Z-score)_-_Nutlin-3_(Sanger_Z-score))`,
+         `Nutlin-3_AUC_Z-Score_CTD2`, `Nutlin-3_AUC_Z-Score_Sanger_MGH`, 
+         TP53_Mutation_TCGA, TP53_Mutation_CCLE, TP53_Mutation_Sanger_MGH) %>%
+  inner_join(rownames_to_column(cbind(ssgsea@phenoData@data,t(exprs(ssgsea))), var = "CellLine"), ., by = "CellLine") %>%
+  mutate(TP53_status = ifelse(str_detect(TP53_Mutation_Type_All_Databases,"WT"), "1_WT",
+                              ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Deletion"), "3_Nonsense/Del",
+                                     ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Nonsense"), "3_Nonsense/Del", "2_Other_mutation")))) 
+
+
+top <- score %>% filter(TP53_status == "1_WT") %>% top_n(-20, wt = TCGA_up)
+score <- score %>% mutate(top = ifelse(score$CellLine %in% top$CellLine, "Sign", "NotSign"))
+
+df <- data.frame("CellLine" = score$TP53_status, 
+                 "TCGA_up" = as.numeric(score$TCGA_up), 
+                 "TCGA_dn" = as.numeric(score$TCGA_dn), 
+                 "Sig_Aerts_2016_1" = as.numeric(score$`Sig_Aerts_2016_1`), 
+                 "Sig_Aerts_2016_2" = as.numeric(score$`Sig_Aerts_2016_2`), 
+                 "Sig_Aerts_2016_3" = as.numeric(score$`Sig_Aerts_2016_3`), 
+                 "Functional_score" = as.numeric(score$`Functional_Score_(Target_Genes_(CCLE_Z-score)_-_Nutlin-3_(CTD2_Z-score)_-_Nutlin-3_(Sanger_Z-score))`))
+
+
+p1 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_up", y = "Sig_Aerts_2016_1", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p2 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_up", y = "Sig_Aerts_2016_2", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p3 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_up", y = "Sig_Aerts_2016_3", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p4 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_dn", y = "Sig_Aerts_2016_1", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p5 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_dn", y = "Sig_Aerts_2016_2", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p6 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_dn", y = "Sig_Aerts_2016_3", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p7 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Functional_score", y = "Sig_Aerts_2016_1", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p8 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Functional_score", y = "Sig_Aerts_2016_2", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+p9 <- df %>% filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Functional_score", y = "Sig_Aerts_2016_3", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.6, palette = c("forestgreen", "darkred"))
+
+plot_grid(p1, p2, p3, p4, p5, p6, p7, p8, p9, nrow =3)
+
+```
+
+
+### Performance of Aerts_2016 subclustering
+
+The 3 subsets from Aerts_2016 alone also did not perform well in separating TP53_WT from TP53 nonsense/deletion mutants (with AUC <0.7 overall), suggesting this gene set derived from TF-binding does not out-perform other gene set.
+
+Biologically, it is not surprising that TF-binding site is not a good prediction of gene expression due to the diverse transcriptional regulation from protein-DNA binding to actually regulate gene expression.
+
+
+```{r,fig.height=4, fig.width=12}
+df1 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del")
+test <- wilcox.test(`Sig_Aerts_2016_1` ~ TP53_status, data = df1)
+n1 <- df1 %>% filter(TP53_status == unique(df1$TP53_status)[[1]]) %>% nrow()
+n2 <- df1 %>% filter(TP53_status == unique(df1$TP53_status)[[2]]) %>% nrow()
+#test$statistic/(n1 * n2)
+
+p1 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= `Sig_Aerts_2016_1`), color= TP53_status, fill= TP53_status) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + 
+  theme_bw() + geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.619")
+
+p2 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= `Sig_Aerts_2016_2`), color= TP53_status, fill= TP53_status) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.542")
+
+p3 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= `Sig_Aerts_2016_3`), color= TP53_status, fill= TP53_status) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.662")
+
+plot_grid(p1, p2, p3, nrow =1)
+
+```
+
+
+
+# Performance of p53 scores
+
+Similar to above performance evaluation, I look at how good other p53 signatures are in separating P53_WT from TP53 nonsense/deletion mutants.
+
+## p53 score by TP53 genetic status
+
+p53 score of all the potential signatures based on the Depmap cell line data. AUC is calculated comparing WT and Nonsense/Deletion columns.
+
+As shown above, TCGA_up and Jeay_2015 are the best performer in this binary classification task (with AUC>0.85). Simply looking at Setdiff or Shared gene sets between TCGA_up and Jeay_2015, it does not lead to better performance in this task.
+
+```{r,fig.height=9, fig.width=12}
+# function to calculate AUC from statistics of Wilcoxon test
+df1 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del")
+test <- wilcox.test(Sig_Aerts_2016 ~ TP53_status, data = df1)
+n1 <- df1 %>% filter(TP53_status == unique(df1$TP53_status)[[1]]) %>% nrow()
+n2 <- df1 %>% filter(TP53_status == unique(df1$TP53_status)[[2]]) %>% nrow()
+#test$statistic/(n1 * n2)
+
+p1 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= Sig_Jeay_2015, color= TP53_status, fill= TP53_status)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.888")
+
+p2 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= TCGA_up, color= TP53_status, fill= TP53_status)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red"))+ ggtitle("AUC = 0.863")
+
+p3 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= Setdiff_TCGA_Jeay, color= TP53_status, fill= TP53_status)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.815")
+
+p4 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= Shared_TCGA_Jeay, color= TP53_status, fill= TP53_status)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.860")
+
+p5 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= TCGA_dn, color= TP53_status, fill= TP53_status)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.322")
+
+p6 <- score %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del") %>% 
+  ggplot(aes(x= TP53_status, y= Sig_Aerts_2016, color= TP53_status, fill= TP53_status)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() +
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + ggtitle("AUC = 0.766")
+
+plot_grid(p6, p2, p5, p1,  p3, p4, ncol =3)
+
+```
+
+
+
+## Concordence between signatures
+
+Scatter plot showing the visualized correlation of all the p53 signatures compared so far. TCGA_up and Jeay_2015 are indeed very similar in binary classification.
+
+While TCGA_dn performs the worst, there is still a trend of negative correlation with TCGA_up
+
+
+```{r,fig.height=8, fig.width=8}
+p1 <- data.frame("CellLine" = score$TP53_status, 
+                 "TCGA_up" = as.numeric(score$TCGA_up),
+                 "Sig_Jeay_2015" = as.numeric(score$Sig_Jeay_2015)) %>% 
+  filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_up", y = "Sig_Jeay_2015", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.7, palette = c("forestgreen","darkred"))
+
+p2 <- data.frame("CellLine" = score$TP53_status, 
+                 "Setdiff_TCGA_Jeay" = as.numeric(score$Setdiff_TCGA_Jeay),
+                 "Shared_TCGA_Jeay" = as.numeric(score$Shared_TCGA_Jeay)) %>% 
+  filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Setdiff_TCGA_Jeay", y = "Shared_TCGA_Jeay", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.7, palette = c("forestgreen", "darkred"))
+
+p3 <- data.frame("CellLine" = score$TP53_status, 
+                 "Union_TCGA_Jeay" = as.numeric(score$Union_TCGA_Jeay),
+                 "Sig_Jeay_2015" = as.numeric(score$Sig_Jeay_2015)) %>% 
+  filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "Union_TCGA_Jeay", y = "Sig_Jeay_2015", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.7, palette = c("forestgreen", "darkred"))
+
+p4 <- data.frame("CellLine" = score$TP53_status, 
+                 "TCGA_up" = as.numeric(score$TCGA_up),
+                 "TCGA_dn" = as.numeric(score$TCGA_dn)) %>% 
+  filter(CellLine != "2_Other_mutation") %>% 
+  ggscatter(x = "TCGA_up", y = "TCGA_dn", color = "CellLine", fullrange = TRUE, 
+            rug = FALSE, size = 2, alpha=0.7, palette = c("forestgreen", "darkred"))
+
+plot_grid(p1, p2, p3, p4, ncol =2)
+
+```
+
+
+Even with the binary categorization of TP53 genotype, it is possible that other passenger mutations (p53-related or not) can impact p53 functionality. To assess this, I subsetted the Depmap cell lines into top-25 quantile and bottom-75 quantile to evaluate if there is a differential responses. 
+
+Overall, there's no striking difference in separating top 25 quantile, showing that the binary classification based on TP53 genotype is reasonable.
+
+
+```{r, fig.height=4, fig.width=8}
+
+df_WT <- score %>% filter(TP53_status == "1_WT")
+df_Mut <- score %>% filter(TP53_status == "2_Other_mutation")
+Q25_WT <- df_WT %>% filter(Shared_TCGA_Jeay >= quantile(df_WT$Shared_TCGA_Jeay)[["75%"]]) %>% mutate(TP53 = "1_WT")
+Q25_Mut <- df_Mut %>% filter(Shared_TCGA_Jeay >= quantile(df_Mut$Shared_TCGA_Jeay)[["75%"]]) %>% mutate(TP53 = "2_Mut")
+df_Q25 <- rbind(Q25_WT, Q25_Mut)
+df_Q25_filter <- df_Q25[!is.na(df_Q25$`Nutlin-3_AUC_Z-Score_CTD2`),]
+df_Q25_filter$`Nutlin-3_AUC_Z-Score_CTD2` <- as.numeric(df_Q25_filter$`Nutlin-3_AUC_Z-Score_CTD2`)
+
+test <- wilcox.test(`Nutlin-3_AUC_Z-Score_CTD2` ~ TP53, data = df_Q25_filter)
+n1 <- df_Q25 %>% filter(TP53 == unique(df_Q25$TP53)[[1]]) %>% nrow()
+n2 <- df_Q25 %>% filter(TP53 == unique(df_Q25$TP53)[[2]]) %>% nrow()
+#test$statistic/(n1 * n2)
+
+p1 <- df_Q25_filter %>% ggplot(aes(x= TP53, y= `Nutlin-3_AUC_Z-Score_CTD2`)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + 
+  theme_bw() + 
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + 
+  ggtitle(paste0("25% Quantile, AUC =", round(test$statistic/(n1 * n2), 3)))
+
+
+Q75_WT <- df_WT %>% filter(Shared_TCGA_Jeay <= quantile(df_WT$Shared_TCGA_Jeay)[["25%"]]) %>% mutate(TP53 = "1_WT")
+Q75_Mut <- df_Mut %>% filter(Shared_TCGA_Jeay <= quantile(df_Mut$Shared_TCGA_Jeay)[["25%"]]) %>% mutate(TP53 = "2_Mut")
+df_Q75 <- rbind(Q75_WT, Q75_Mut)
+df_Q75_filter <- df_Q75[!is.na(df_Q75$`Nutlin-3_AUC_Z-Score_CTD2`),]
+df_Q75_filter$`Nutlin-3_AUC_Z-Score_CTD2` <- as.numeric(df_Q75_filter$`Nutlin-3_AUC_Z-Score_CTD2`)
+
+test <- wilcox.test(`Nutlin-3_AUC_Z-Score_CTD2` ~ TP53, data = df_Q75_filter)
+n1 <- df_Q75 %>% filter(TP53 == unique(df_Q75$TP53)[[1]]) %>% nrow()
+n2 <- df_Q75 %>% filter(TP53 == unique(df_Q75$TP53)[[2]]) %>% nrow()
+#test$statistic/(n1 * n2)
+
+p2 <- df_Q75_filter %>% ggplot(aes(x= TP53, y= `Nutlin-3_AUC_Z-Score_CTD2`)) + 
+  geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + 
+  theme_bw() + 
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("grey20", "red")) + 
+  ggtitle(paste0("75% Quantile, AUC =", round(test$statistic/(n1 * n2), 3)))
+
+plot_grid(p1, p2, ncol =2)
+
+```
+
+```{r, fig.height=4, fig.width=8}
+
+df_WT <- score %>% filter(TP53_status == "1_WT")
+df_Mut <- score %>% filter(TP53_status == "2_Other_mutation")
+Q25_WT <- df_WT %>% filter(Sig_Jeay_2015 >= quantile(df_WT$Sig_Jeay_2015)[["75%"]]) %>% mutate(TP53 = "1_WT")
+Q25_Mut <- df_Mut %>% filter(Sig_Jeay_2015 >= quantile(df_Mut$Sig_Jeay_2015)[["75%"]]) %>% mutate(TP53 = "2_Mut")
+df_Q25 <- rbind(Q25_WT, Q25_Mut)
+df_Q25_filter <- df_Q25[!is.na(df_Q25$`Nutlin-3_AUC_Z-Score_CTD2`),]
+df_Q25_filter$`Nutlin-3_AUC_Z-Score_CTD2` <- as.numeric(df_Q25_filter$`Nutlin-3_AUC_Z-Score_CTD2`)
+
+test <- wilcox.test(TCGA_dn ~ TP53, data = df_Q25_filter)
+n1 <- df_Q25 %>% filter(TP53 == unique(df_Q25$TP53)[[1]]) %>% nrow()
+n2 <- df_Q25 %>% filter(TP53 == unique(df_Q25$TP53)[[2]]) %>% nrow()
+#test$statistic/(n1 * n2)
+
+p1 <- df_Q25_filter %>% ggplot(aes(x= TP53, y= TCGA_dn, color= TP53_status, fill= TP53_status)) + geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() + geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + theme(legend.position = "none", axis.text.x= element_text(size =12), axis.text.y= element_text(size =12), axis.title.x = element_blank(), axis.title.y = element_text(size =14, face= "bold")) + scale_color_manual(values = c("grey20", "red")) + ggtitle(paste0("25% Quantile, AUC =", round(test$statistic/(n1 * n2), 3)))
+
+Q75_WT <- df_WT %>% filter(Sig_Jeay_2015 <= quantile(df_WT$Sig_Jeay_2015)[["25%"]]) %>% mutate(TP53 = "1_WT")
+Q75_Mut <- df_Mut %>% filter(Sig_Jeay_2015 <= quantile(df_Mut$Sig_Jeay_2015)[["25%"]]) %>% mutate(TP53 = "2_Mut")
+df_Q75 <- rbind(Q75_WT, Q75_Mut)
+df_Q75_filter <- df_Q75[!is.na(df_Q75$`Nutlin-3_AUC_Z-Score_CTD2`),]
+df_Q75_filter$`Nutlin-3_AUC_Z-Score_CTD2` <- as.numeric(df_Q75_filter$`Nutlin-3_AUC_Z-Score_CTD2`)
+
+test <- wilcox.test(TCGA_dn ~ TP53, data = df_Q75_filter)
+n1 <- df_Q75 %>% filter(TP53 == unique(df_Q75$TP53)[[1]]) %>% nrow()
+n2 <- df_Q75 %>% filter(TP53 == unique(df_Q75$TP53)[[2]]) %>% nrow()
+#test$statistic/(n1 * n2)
+
+p2 <- df_Q75_filter %>% ggplot(aes(x= TP53, y= TCGA_dn, color= TP53_status, fill= TP53_status)) + geom_boxplot(color = "navyblue", fill = "navyblue", outlier.shape=NA, alpha= 0.5, width = 0.4) + theme_bw() + geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + theme(legend.position = "none", axis.text.x= element_text(size =12), axis.text.y= element_text(size =12), axis.title.x = element_blank(), axis.title.y = element_text(size =14, face= "bold")) + scale_color_manual(values = c("grey20", "red")) + ggtitle(paste0("75% Quantile, AUC =", round(test$statistic/(n1 * n2), 3)))
+
+plot_grid(p1, p2, ncol =2)
+
+```
+
+## Testing up- substrating dn- signature
+
+We saw TCGA_dn signature is negatively associated with TCGA_up. Therefore, I wanted to explore if such negative correlation can benefit the classification task by increasing the differeces.
+
+ssgsea takes into directionality by using +1 score substracting -1 score. Here, I try to substract TCGA_dn score to see if it achieves a better AUC
+
+The result shows that this strategy does not lead to a better performance in terms of binary classification. It is potentially due to the lower separation of TCGA_dn, and the two signatures might have a different effects on top- and bottom- performing cell lines. However, the performance is still pretty good. It might still be interesting if there is a probelm of generalizability and over-fitting to this dataset.
+
+
+```{r,fig.height=5, fig.width=12}
+df <- score %>% mutate(TP53_status = ifelse(str_detect(TP53_Mutation_Type_All_Databases,"WT"), "1_WT", ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Deletion"), "3_Nonsense/Del", ifelse(str_detect(TP53_Mutation_Type_All_Databases,"Nonsense"), "3_Nonsense/Del", "2_Other_mutation")))) %>% mutate("Shared_DN" = Shared_TCGA_Jeay - TCGA_dn, "TCGA_UP_DN" = TCGA_up - TCGA_dn, "Jeay_DN" = Sig_Jeay_2015 - TCGA_dn)
+
+# function to calculate AUC from statistics of Wilcoxon test
+df1 <- df %>% filter(TP53_status == "1_WT" | TP53_status == "3_Nonsense/Del")
+test <- wilcox.test(Shared_DN ~ TP53_status, data = df1)
+n1 <- df1 %>% filter(TP53_status == unique(df1$TP53_status)[[1]]) %>% nrow()
+n2 <- df1 %>% filter(TP53_status == unique(df1$TP53_status)[[2]]) %>% nrow()
+#test$statistic/(n1 * n2)
+
+p1 <- df %>% filter(TP53_status != "2_Other_mutation") %>% 
+  ggplot(aes(x= TP53_status, y= Jeay_DN), color= TP53_status, fill= TP53_status) + 
+  geom_boxplot(color = "skyblue3", fill = "skyblue3", outlier.shape=NA, alpha= 0.5, width = 0.4) + 
+  theme_bw() + 
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("blue2", "red")) + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) + ggtitle("AUC = 0.866")
+
+p2 <- df %>% filter(TP53_status != "2_Other_mutation") %>% 
+  ggplot(aes(x= TP53_status, y= TCGA_UP_DN), color= TP53_status, fill= TP53_status) + 
+  geom_boxplot(color = "skyblue3", fill = "skyblue3", outlier.shape=NA, alpha= 0.5, width = 0.4) + 
+  theme_bw() + 
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("blue2", "red")) + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) + 
+  ggtitle("AUC = 0.837")
+
+p3 <- df %>% filter(TP53_status != "2_Other_mutation") %>% 
+  ggplot(aes(x= TP53_status, y= Shared_DN), color= TP53_status, fill= TP53_status) + 
+  geom_boxplot(color = "skyblue3", fill = "skyblue3", outlier.shape=NA, alpha= 0.5, width = 0.4) + 
+  theme_bw() + 
+  geom_jitter(position=position_jitter(0.2), cex=1, alpha = 0.5, aes(color = top)) + 
+  theme(legend.position = "none", axis.text.x= element_text(size =12), 
+        axis.text.y= element_text(size =12), axis.title.x = element_blank(), 
+        axis.title.y = element_text(size =14, face= "bold")) + 
+  scale_color_manual(values = c("blue2", "red")) + 
+  scale_x_discrete(guide = guide_axis(angle = 45)) + 
+  ggtitle("AUC = 0.857")
+
+
+plot_grid(p1, p2, p3, nrow =1)
+```
+
+
